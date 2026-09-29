@@ -1,0 +1,255 @@
+{
+  "entities": {
+    "user": {
+      "title": "User",
+      "description": "User profile with role-based access information",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for user"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of user",
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User email address",
+          "maxLength": 150
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "teacher", "student"],
+          "description": "Assigned institutional role"
+        },
+        "department": {
+          "type": "string",
+          "description": "Academic department or division",
+          "maxLength": 120
+        },
+        "studentId": {
+          "type": "string",
+          "description": "Associated student document ID if role is student"
+        },
+        "rollNo": {
+          "type": "string",
+          "description": "Associated student roll number if role is student",
+          "maxLength": 30
+        }
+      },
+      "required": ["id", "name", "email", "role", "department"]
+    },
+    "student": {
+      "title": "Student",
+      "description": "Student academic profile and enrollment data",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique student identifier"
+        },
+        "rollNo": {
+          "type": "string",
+          "description": "Institutional roll number",
+          "maxLength": 30
+        },
+        "name": {
+          "type": "string",
+          "description": "Full name of student",
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Student institutional or personal email",
+          "maxLength": 150
+        },
+        "phone": {
+          "type": "string",
+          "description": "Contact telephone number",
+          "maxLength": 25
+        },
+        "parentPhone": {
+          "type": "string",
+          "description": "Parent or guardian contact number",
+          "maxLength": 25
+        },
+        "courseId": {
+          "type": "string",
+          "description": "Enrolled course identifier"
+        },
+        "semester": {
+          "type": "string",
+          "description": "Current active semester",
+          "maxLength": 30
+        },
+        "enrollmentDate": {
+          "type": "string",
+          "description": "Enrollment date YYYY-MM-DD",
+          "maxLength": 20
+        },
+        "totalFee": {
+          "type": "number",
+          "description": "Total academic fee obligation"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "inactive"],
+          "description": "Student status"
+        }
+      },
+      "required": ["id", "rollNo", "name", "email", "courseId", "semester", "totalFee", "status"]
+    },
+    "course": {
+      "title": "Course",
+      "description": "Degree course or academic program",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Course identifier"
+        },
+        "code": {
+          "type": "string",
+          "description": "Course code",
+          "maxLength": 30
+        },
+        "name": {
+          "type": "string",
+          "description": "Full course name",
+          "maxLength": 150
+        },
+        "semester": {
+          "type": "string",
+          "description": "Course semester",
+          "maxLength": 30
+        },
+        "department": {
+          "type": "string",
+          "description": "Department name",
+          "maxLength": 100
+        },
+        "totalCredits": {
+          "type": "number",
+          "description": "Total academic credits"
+        }
+      },
+      "required": ["id", "code", "name", "semester", "department", "totalCredits"]
+    },
+    "attendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Single daily attendance session entry for a student",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Attendance record identifier"
+        },
+        "studentId": {
+          "type": "string",
+          "description": "Referenced student identifier"
+        },
+        "courseId": {
+          "type": "string",
+          "description": "Referenced course identifier"
+        },
+        "date": {
+          "type": "string",
+          "description": "Date of attendance YYYY-MM-DD",
+          "maxLength": 20
+        },
+        "status": {
+          "type": "string",
+          "enum": ["present", "absent", "late", "excused"],
+          "description": "Attendance status"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Remarks or excuse notes",
+          "maxLength": 250
+        },
+        "markedBy": {
+          "type": "string",
+          "description": "Faculty or admin name who recorded attendance",
+          "maxLength": 100
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Timestamp of record creation or update",
+          "maxLength": 50
+        }
+      },
+      "required": ["id", "studentId", "courseId", "date", "status", "markedBy"]
+    },
+    "feePayment": {
+      "title": "FeePayment",
+      "description": "Fee receipt transaction recorded for a student",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Payment transaction identifier"
+        },
+        "receiptNo": {
+          "type": "string",
+          "description": "Unique fee receipt voucher number",
+          "maxLength": 40
+        },
+        "studentId": {
+          "type": "string",
+          "description": "Referenced student identifier"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Amount paid in INR"
+        },
+        "paymentDate": {
+          "type": "string",
+          "description": "Payment date YYYY-MM-DD",
+          "maxLength": 20
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["Bank Transfer", "Cash", "Credit/Debit Card", "Online/UPI", "Cheque"],
+          "description": "Payment method used"
+        },
+        "recordedBy": {
+          "type": "string",
+          "description": "Staff or Bursar who processed payment",
+          "maxLength": 100
+        },
+        "notes": {
+          "type": "string",
+          "description": "Transaction remarks",
+          "maxLength": 250
+        }
+      },
+      "required": ["id", "receiptNo", "studentId", "amount", "paymentDate", "paymentMethod", "recordedBy"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "Collection of user accounts and profile roles"
+    },
+    "/students/{studentId}": {
+      "schema": "student",
+      "description": "Collection of enrolled student academic and fee records"
+    },
+    "/courses/{courseId}": {
+      "schema": "course",
+      "description": "Collection of academic degree courses and programs"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "attendanceRecord",
+      "description": "Collection of daily attendance marks for students"
+    },
+    "/payments/{paymentId}": {
+      "schema": "feePayment",
+      "description": "Collection of tuition fee payments and receipts"
+    }
+  }
+}

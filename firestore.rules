@@ -1,0 +1,160 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default-deny catch-all (Pillar 4.1)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'mishrasaksham058@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Validation helper for Course
+    function isValidCourse(data) {
+      return data.keys().hasAll(['id', 'code', 'name', 'semester', 'department', 'totalCredits']) &&
+             data.keys().hasOnly(['id', 'code', 'name', 'semester', 'department', 'totalCredits']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 64 &&
+             data.code is string && data.code.size() > 0 && data.code.size() <= 30 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 150 &&
+             data.semester is string && data.semester.size() <= 30 &&
+             data.department is string && data.department.size() <= 100 &&
+             data.totalCredits is number && data.totalCredits >= 0;
+    }
+
+    // Validation helper for Student
+    function isValidStudent(data) {
+      return data.keys().hasAll(['id', 'rollNo', 'name', 'email', 'courseId', 'semester', 'totalFee', 'status']) &&
+             data.keys().hasOnly(['id', 'rollNo', 'name', 'email', 'phone', 'parentPhone', 'courseId', 'semester', 'enrollmentDate', 'totalFee', 'status']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 64 &&
+             data.rollNo is string && data.rollNo.size() > 0 && data.rollNo.size() <= 30 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.email is string && data.email.size() > 0 && data.email.size() <= 150 &&
+             data.courseId is string && data.courseId.size() > 0 && data.courseId.size() <= 64 &&
+             data.semester is string && data.semester.size() <= 30 &&
+             data.totalFee is number && data.totalFee >= 0 &&
+             (data.status == 'active' || data.status == 'inactive') &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 25)) &&
+             (!('parentPhone' in data) || (data.parentPhone is string && data.parentPhone.size() <= 25)) &&
+             (!('enrollmentDate' in data) || (data.enrollmentDate is string && data.enrollmentDate.size() <= 25));
+    }
+
+    // Validation helper for AttendanceRecord
+    function isValidAttendance(data) {
+      return data.keys().hasAll(['id', 'studentId', 'courseId', 'date', 'status', 'markedBy']) &&
+             data.keys().hasOnly(['id', 'studentId', 'courseId', 'date', 'status', 'notes', 'markedBy', 'updatedAt']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.studentId is string && data.studentId.size() > 0 && data.studentId.size() <= 64 &&
+             data.courseId is string && data.courseId.size() > 0 && data.courseId.size() <= 64 &&
+             data.date is string && data.date.size() > 0 && data.date.size() <= 20 &&
+             (data.status == 'present' || data.status == 'absent' || data.status == 'late' || data.status == 'excused') &&
+             data.markedBy is string && data.markedBy.size() > 0 && data.markedBy.size() <= 100 &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 250)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 50));
+    }
+
+    // Validation helper for FeePayment
+    function isValidPayment(data) {
+      return data.keys().hasAll(['id', 'receiptNo', 'studentId', 'amount', 'paymentDate', 'paymentMethod', 'recordedBy']) &&
+             data.keys().hasOnly(['id', 'receiptNo', 'studentId', 'amount', 'paymentDate', 'paymentMethod', 'recordedBy', 'notes']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.receiptNo is string && data.receiptNo.size() > 0 && data.receiptNo.size() <= 40 &&
+             data.studentId is string && data.studentId.size() > 0 && data.studentId.size() <= 64 &&
+             data.amount is number && data.amount > 0 &&
+             data.paymentDate is string && data.paymentDate.size() > 0 && data.paymentDate.size() <= 20 &&
+             (data.paymentMethod == 'Bank Transfer' || data.paymentMethod == 'Cash' || data.paymentMethod == 'Credit/Debit Card' || data.paymentMethod == 'Online/UPI' || data.paymentMethod == 'Cheque') &&
+             data.recordedBy is string && data.recordedBy.size() > 0 && data.recordedBy.size() <= 100 &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 250));
+    }
+
+    // Validation helper for User
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'name', 'email', 'role', 'department']) &&
+             data.keys().hasOnly(['id', 'name', 'email', 'role', 'department', 'studentId', 'rollNo']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.email is string && data.email.size() > 0 && data.email.size() <= 150 &&
+             (data.role == 'admin' || data.role == 'teacher' || data.role == 'student') &&
+             data.department is string && data.department.size() <= 120 &&
+             (!('studentId' in data) || (data.studentId is string && data.studentId.size() <= 64)) &&
+             (!('rollNo' in data) || (data.rollNo is string && data.rollNo.size() <= 30));
+    }
+
+    // Courses Collection
+    match /courses/{courseId} {
+      allow get: if isValidId(courseId);
+      allow list: if true;
+      allow create: if isValidId(courseId) && isValidCourse(incoming());
+      allow update: if isValidId(courseId) && isValidCourse(incoming());
+      allow delete: if isValidId(courseId);
+    }
+
+    // Students Collection
+    match /students/{studentId} {
+      allow get: if isValidId(studentId);
+      allow list: if true;
+      allow create: if isValidId(studentId) && isValidStudent(incoming());
+      allow update: if isValidId(studentId) && isValidStudent(incoming());
+      allow delete: if isValidId(studentId);
+    }
+
+    // Attendance Collection
+    match /attendance/{attendanceId} {
+      allow get: if isValidId(attendanceId);
+      allow list: if true;
+      allow create: if isValidId(attendanceId) && isValidAttendance(incoming());
+      allow update: if isValidId(attendanceId) && isValidAttendance(incoming());
+      allow delete: if isValidId(attendanceId);
+    }
+
+    // Fee Payments Collection
+    match /payments/{paymentId} {
+      allow get: if isValidId(paymentId);
+      allow list: if true;
+      allow create: if isValidId(paymentId) && isValidPayment(incoming());
+      allow update: if isValidId(paymentId) && isValidPayment(incoming());
+      allow delete: if isValidId(paymentId);
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isValidId(userId);
+      allow list: if true;
+      allow create: if isValidId(userId) && isValidUser(incoming());
+      allow update: if isValidId(userId) && isValidUser(incoming());
+      allow delete: if isValidId(userId);
+    }
+
+    // Admin Reference Document
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Test Connection Document for Connectivity Check
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}

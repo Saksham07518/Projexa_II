@@ -1,0 +1,8 @@
+{
+  "name": "Remix Student Attendance and Fee Management System",
+  "description": "Centralized institutional platform for recording student attendance, tracking attendance percentages, and managing student fee payments and balances with real-time Firebase Firestore backend.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

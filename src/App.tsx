@@ -21,7 +21,7 @@ import { CheckCircle2, Info, Building2, ShieldCheck, UserCheck, LogOut, ArrowLef
 
 export default function App() {
   // Master data states
-  const [currentUser, setCurrentUser] = useState<User | null>(() => storage.getCurrentUser());
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [courses, setCourses] = useState<Course[]>(() => storage.getCourses());
   const [students, setStudents] = useState<Student[]>(() => storage.getStudents());
   const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => storage.getAttendance());
@@ -50,6 +50,7 @@ export default function App() {
   // Real-time Firestore synchronization & seed check
   useEffect(() => {
     let isMounted = true;
+    let activeAuthUid: string | null = null;
 
     // 1. Verify Firestore connectivity
     testConnection().then((connected) => {
@@ -99,33 +100,30 @@ export default function App() {
 
     // 4. Monitor Firebase Auth state
     const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
-      if (!isMounted) return;
-      if (fbUser && !storage.getCurrentUser()) {
-        const email = fbUser.email || '';
-        const name = fbUser.displayName || 'Authorized User';
-        let role: UserRole = 'teacher';
-        let dept = 'Academic Faculty';
+      activeAuthUid = fbUser?.uid ?? null;
+      if (!fbUser) {
+        setCurrentUser(null);
+        storage.setCurrentUser(null);
+        return;
+      }
 
-        if (
-          email.toLowerCase() === 'mishrasaksham058@gmail.com' ||
-          email.toLowerCase().includes('admin') ||
-          email.toLowerCase().includes('registrar')
-        ) {
-          role = 'admin';
-          dept = 'Academic Administration & Bursar Office';
+      void firestoreService.getUser(fbUser.uid).then((userProfile) => {
+        if (!isMounted || activeAuthUid !== fbUser.uid) return;
+        if (!userProfile) {
+          setCurrentUser(null);
+          storage.setCurrentUser(null);
+          return;
         }
 
-        const appUser: User = {
-          id: fbUser.uid,
-          name,
-          email,
-          role,
-          department: dept,
-        };
-
-        setCurrentUser(appUser);
-        storage.setCurrentUser(appUser);
-      }
+        setCurrentUser(userProfile);
+        storage.setCurrentUser(userProfile);
+      }).catch((err) => {
+        console.error('Could not restore Firebase user profile:', err);
+        if (isMounted && activeAuthUid === fbUser.uid) {
+          setCurrentUser(null);
+          storage.setCurrentUser(null);
+        }
+      });
     });
 
     return () => {
@@ -158,6 +156,11 @@ export default function App() {
 
   // Role switching (for faculty/admin)
   const handleRoleSwitch = (newRole: UserRole) => {
+    if (newRole === 'admin' && currentUser?.role !== 'admin') {
+      showToast('Only an authorized Firebase administrator can access the admin role.');
+      return;
+    }
+
     if (newRole === 'student') {
       const firstStudent = students[0];
       const studentUser: User = {
@@ -370,7 +373,6 @@ export default function App() {
         students={students}
         courses={courses}
         onLogin={handleLogin}
-        onRegisterStudent={handleAddStudent}
         initialRole="admin"
       />
     );

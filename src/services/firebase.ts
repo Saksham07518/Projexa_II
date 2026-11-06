@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
@@ -11,6 +11,16 @@ export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 export { signOut, onAuthStateChanged };
 export type { FirebaseUser };
+
+export async function hasAdminAccess(user: FirebaseUser): Promise<boolean> {
+  if (user.email?.toLowerCase() === 'mishrasaksham058@gmail.com') {
+    return true;
+  }
+
+  const adminDoc = await getDoc(doc(db, 'admins', user.uid));
+  return adminDoc.exists();
+}
+
 export const firebaseProjectInfo = {
   projectId: firebaseConfig.projectId,
   databaseId: firebaseConfig.firestoreDatabaseId,

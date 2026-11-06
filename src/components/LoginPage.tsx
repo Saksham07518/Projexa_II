@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { User, UserRole, Student, Course } from '../types';
-import { signInWithPopup } from 'firebase/auth';
-import { auth, googleProvider, firebaseProjectInfo } from '../services/firebase';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  updateProfile,
+  type User as FirebaseUser,
+} from 'firebase/auth';
+import { auth, googleProvider, hasAdminAccess, signOut } from '../services/firebase';
 import { firestoreService } from '../services/firestoreService';
 import { formatCurrency } from '../utils/calculations';
 import { 
@@ -35,7 +41,6 @@ interface LoginPageProps {
   students: Student[];
   courses: Course[];
   onLogin: (user: User) => void;
-  onRegisterStudent?: (student: Student) => void | Promise<void>;
   initialRole?: 'admin' | 'teacher' | 'student';
 }
 
@@ -43,28 +48,26 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   students,
   courses,
   onLogin,
-  onRegisterStudent,
   initialRole = 'admin',
 }) => {
   const [portalTab, setPortalTab] = useState<'admin' | 'teacher' | 'student'>(initialRole);
 
   // Admin Form State
-  const [adminEmail, setAdminEmail] = useState('registrar.sharma@university.ac.in');
-  const [adminPassword, setAdminPassword] = useState('••••••••');
-  const [adminSecurityPin, setAdminSecurityPin] = useState('8821');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
   const [adminShowPassword, setAdminShowPassword] = useState(false);
   const [adminError, setAdminError] = useState<string | null>(null);
 
   // Teacher Form State
-  const [teacherEmail, setTeacherEmail] = useState('a.sen@university.ac.in');
-  const [teacherPassword, setTeacherPassword] = useState('••••••••');
+  const [teacherEmail, setTeacherEmail] = useState('');
+  const [teacherPassword, setTeacherPassword] = useState('');
   const [teacherShowPassword, setTeacherShowPassword] = useState(false);
   const [teacherError, setTeacherError] = useState<string | null>(null);
 
   // Student Form State
   const [studentPortalMode, setStudentPortalMode] = useState<'signin' | 'register'>('signin');
-  const [studentRollNo, setStudentRollNo] = useState('CS-2024-001');
-  const [studentPassword, setStudentPassword] = useState('••••••••');
+  const [studentRollNo, setStudentRollNo] = useState('');
+  const [studentPassword, setStudentPassword] = useState('');
   const [studentShowPassword, setStudentShowPassword] = useState(false);
   const [studentError, setStudentError] = useState<string | null>(null);
 
@@ -120,6 +123,58 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
   // Firebase Google Auth State
   const [isSigningInGoogle, setIsSigningInGoogle] = useState(false);
+  const [isSigningInEmail, setIsSigningInEmail] = useState(false);
+
+  const completeFirebaseSignIn = async (
+    fbUser: FirebaseUser,
+    role: UserRole,
+    student?: Student
+  ) => {
+    try {
+      const email = fbUser.email?.trim().toLowerCase();
+      if (!email) {
+        throw new Error('Your Firebase account does not have an email address.');
+      }
+
+      const isAdmin = await hasAdminAccess(fbUser);
+      const existingProfile =
+        (await firestoreService.getUser(fbUser.uid)) ??
+        (await firestoreService.getUserByEmail(email));
+
+      if (role === 'admin' && !isAdmin) {
+        throw new Error('This account is not authorized for administrator access.');
+      }
+      if (role === 'teacher' && (isAdmin || existingProfile?.role !== 'teacher')) {
+        throw new Error('This account is not assigned to a faculty profile.');
+      }
+      if (role === 'student' && (!student || student.email.toLowerCase() !== email)) {
+        throw new Error('This Google account is not linked to the selected student record.');
+      }
+
+      const course = student ? courses.find((item) => item.id === student.courseId) : undefined;
+      const userProfile: User = {
+        id: fbUser.uid,
+        name: fbUser.displayName || existingProfile?.name || student?.name || email,
+        email,
+        role,
+        department:
+          (role === 'admin' && existingProfile?.department) ||
+          (role === 'teacher' && existingProfile?.department) ||
+          course?.department ||
+          (role === 'admin' ? 'Academic Administration & Bursar Office' : 'Academic Faculty'),
+        studentId: student?.id,
+        rollNo: student?.rollNo,
+      };
+
+      await firestoreService.saveUser(userProfile);
+      onLogin(userProfile);
+    } catch (err) {
+      if (auth.currentUser?.uid === fbUser.uid) {
+        await signOut(auth);
+      }
+      throw err;
+    }
+  };
 
   const handleGoogleSignIn = async (preferredRole: 'admin' | 'teacher' | 'student') => {
     try {
@@ -129,46 +184,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       setStudentError(null);
       const result = await signInWithPopup(auth, googleProvider);
       const fbUser = result.user;
-      const email = fbUser.email || '';
-      const name = fbUser.displayName || (preferredRole === 'student' ? 'Student User' : preferredRole === 'admin' ? 'University Administrator' : 'Faculty Member');
-
-      let role: UserRole = preferredRole === 'student' ? 'student' : preferredRole === 'admin' ? 'admin' : 'teacher';
-      let dept = preferredRole === 'admin' ? 'Academic Administration & Bursar Office' : 'Academic Faculty';
-      let studentId: string | undefined = undefined;
-      let rollNo: string | undefined = undefined;
-
-      // Special check for user email or admin keywords
-      if (
-        preferredRole === 'admin' ||
-        email.toLowerCase() === 'mishrasaksham058@gmail.com' ||
-        email.toLowerCase().includes('admin') ||
-        email.toLowerCase().includes('registrar') ||
-        email.toLowerCase().includes('sharma')
-      ) {
-        role = 'admin';
-        dept = 'Academic Administration & Bursar Office';
-      } else if (preferredRole === 'student') {
-        const matched = students.find((s) => s.email.toLowerCase() === email.toLowerCase()) || students[0];
-        if (matched) {
-          studentId = matched.id;
-          rollNo = matched.rollNo;
-          const crs = courses.find((c) => c.id === matched.courseId);
-          dept = crs?.department || 'Department of Computer Science';
-        }
-      }
-
-      const userProfile: User = {
-        id: fbUser.uid,
-        name,
-        email,
-        role,
-        department: dept,
-        studentId,
-        rollNo,
-      };
-
-      await firestoreService.saveUser(userProfile);
-      onLogin(userProfile);
+      const student = preferredRole === 'student'
+        ? students.find((item) => item.email.toLowerCase() === fbUser.email?.toLowerCase())
+        : undefined;
+      await completeFirebaseSignIn(fbUser, preferredRole, student);
     } catch (err: unknown) {
       console.error('Google Sign-In failed:', err);
       const msg = err instanceof Error ? err.message : 'Authentication with Firebase failed. Please try again.';
@@ -185,119 +204,58 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   };
 
   // Submit Admin Login
-  const handleAdminSubmit = (e: React.FormEvent) => {
+  const handleAdminSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAdminError(null);
 
     const emailTrimmed = adminEmail.trim().toLowerCase();
-    if (!emailTrimmed) {
-      setAdminError('Please enter your administrator institutional email address.');
-      return;
+    try {
+      setIsSigningInEmail(true);
+      const { user } = await signInWithEmailAndPassword(auth, emailTrimmed, adminPassword);
+      await completeFirebaseSignIn(user, 'admin');
+    } catch (err) {
+      console.error('Administrator sign-in failed:', err);
+      setAdminError(err instanceof Error ? err.message : 'Sign-in failed. Please check your credentials and try again.');
+    } finally {
+      setIsSigningInEmail(false);
     }
-
-    if (emailTrimmed.includes('dean')) {
-      onLogin({
-        id: 'user_admin_dean',
-        name: 'Prof. K. N. Rao',
-        email: emailTrimmed,
-        role: 'admin',
-        department: 'Office of the Dean of Academic Affairs',
-      });
-    } else if (emailTrimmed.includes('bursar') || emailTrimmed.includes('finance') || emailTrimmed.includes('sundaram')) {
-      onLogin({
-        id: 'user_admin_bursar',
-        name: 'Smt. Meenakshi Sundaram',
-        email: emailTrimmed,
-        role: 'admin',
-        department: 'Office of the University Bursar & Comptroller',
-      });
-    } else {
-      onLogin({
-        id: 'user_admin',
-        name: 'Dr. Rajeshwar Sharma',
-        email: emailTrimmed,
-        role: 'admin',
-        department: 'Academic Administration & Bursar Office',
-      });
-    }
-  };
-
-  // Quick Admin Demo Login
-  const handleAdminDemoLogin = (email: string, name: string, dept: string) => {
-    setAdminError(null);
-    onLogin({
-      id: 'user_admin',
-      name,
-      email,
-      role: 'admin',
-      department: dept,
-    });
-  };
-
-  // Quick Faculty Login
-  const handleFacultyDemoLogin = (email: string, name: string, role: 'teacher' | 'admin', dept: string) => {
-    setTeacherError(null);
-    onLogin({
-      id: role === 'admin' ? 'user_admin' : 'user_teacher',
-      name,
-      email,
-      role,
-      department: dept,
-    });
   };
 
   // Submit Teacher Login
-  const handleTeacherSubmit = (e: React.FormEvent) => {
+  const handleTeacherSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTeacherError(null);
 
-    const emailTrimmed = teacherEmail.trim().toLowerCase();
-    if (!emailTrimmed) {
-      setTeacherError('Please enter your faculty or staff email address.');
-      return;
-    }
-
-    if (emailTrimmed.includes('admin') || emailTrimmed.includes('sharma') || emailTrimmed.includes('registrar')) {
-      onLogin({
-        id: 'user_admin',
-        name: 'Dr. Rajeshwar Sharma',
-        email: emailTrimmed,
-        role: 'admin',
-        department: 'Academic Administration & Bursar Office',
-      });
-    } else {
-      onLogin({
-        id: 'user_teacher',
-        name: emailTrimmed.includes('sen') ? 'Prof. Ananya Sen' : 'Prof. Vikram Malhotra',
-        email: emailTrimmed,
-        role: 'teacher',
-        department: 'Department of Computer Science & Engineering',
-      });
+    try {
+      setIsSigningInEmail(true);
+      const { user } = await signInWithEmailAndPassword(
+        auth,
+        teacherEmail.trim().toLowerCase(),
+        teacherPassword
+      );
+      await completeFirebaseSignIn(user, 'teacher');
+    } catch (err) {
+      console.error('Faculty sign-in failed:', err);
+      setTeacherError(err instanceof Error ? err.message : 'Sign-in failed. Please check your credentials and try again.');
+    } finally {
+      setIsSigningInEmail(false);
     }
   };
 
-  // Quick Student Demo Login
-  const handleStudentDemoLogin = (roll: string) => {
-    setStudentError(null);
-    const found = students.find((s) => s.rollNo.toLowerCase() === roll.toLowerCase());
-    if (found) {
-      const course = courses.find((c) => c.id === found.courseId);
-      onLogin({
-        id: `usr_${found.id}`,
-        name: found.name,
-        email: found.email,
-        role: 'student',
-        department: course?.department || 'Department of Computer Science',
-        studentId: found.id,
-        rollNo: found.rollNo,
-      });
-    } else {
-      setStudentError(`Student with roll number ${roll} was not found.`);
-    }
+  const handleAdminDemoLogin = (_email: string, _name: string, _department: string) => {
+    setAdminError('Demo sign-in is disabled. Use your Firebase account.');
+  };
+
+  const handleFacultyDemoLogin = (_email: string, _name: string, _role: 'teacher' | 'admin', _department: string) => {
+    setTeacherError('Demo sign-in is disabled. Use your Firebase account.');
+  };
+
+  const handleStudentDemoLogin = (_roll: string) => {
+    setStudentError('Demo sign-in is disabled. Use your Firebase account.');
   };
 
   // Submit Student Login
-  const handleStudentSubmit = (e: React.FormEvent) => {
+  const handleStudentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setStudentError(null);
 
@@ -307,28 +265,28 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       return;
     }
 
-    const matched = students.find(
-      (s) => s.rollNo.toUpperCase() === rollTrimmed || s.email.toLowerCase() === studentRollNo.trim().toLowerCase()
+    const matched = students.find((student) =>
+      student.rollNo.toUpperCase() === rollTrimmed ||
+      student.email.toLowerCase() === studentRollNo.trim().toLowerCase()
     );
 
     if (!matched) {
       setStudentError(
-        `Roll Number "${rollTrimmed}" was not found in the institutional enrollment records. Please verify or use one of the demo roll numbers below.`
+        `Roll Number "${rollTrimmed}" was not found in the institutional enrollment records. Please verify the number and try again.`
       );
       return;
     }
 
-    const course = courses.find((c) => c.id === matched.courseId);
-
-    onLogin({
-      id: `usr_${matched.id}`,
-      name: matched.name,
-      email: matched.email,
-      role: 'student',
-      department: course?.department || 'Department of Computer Science & Engineering',
-      studentId: matched.id,
-      rollNo: matched.rollNo,
-    });
+    try {
+      setIsSigningInEmail(true);
+      const { user } = await signInWithEmailAndPassword(auth, matched.email, studentPassword);
+      await completeFirebaseSignIn(user, 'student', matched);
+    } catch (err) {
+      console.error('Student sign-in failed:', err);
+      setStudentError(err instanceof Error ? err.message : 'Sign-in failed. Please check your credentials and try again.');
+    } finally {
+      setIsSigningInEmail(false);
+    }
   };
 
   // Submit New Student Registration
@@ -350,6 +308,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     }
     if (!emailTrimmed || !emailTrimmed.includes('@')) {
       setRegError('Please enter a valid official student email address.');
+      return;
+    }
+    if (regPassword.length < 6) {
+      setRegError('Choose a password with at least 6 characters.');
       return;
     }
     if (!regCourseId) {
@@ -385,8 +347,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         rollNo: rollTrimmed,
         name: nameTrimmed,
         email: emailTrimmed,
-        phone: regPhone.trim() || undefined,
-        parentPhone: regParentPhone.trim() || undefined,
+        phone: regPhone.trim(),
+        parentPhone: regParentPhone.trim(),
         courseId: regCourseId,
         semester: regSemester,
         enrollmentDate: new Date().toISOString().split('T')[0],
@@ -394,8 +356,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         status: 'active',
       };
 
+      const { user: firebaseUser } = await createUserWithEmailAndPassword(
+        auth,
+        emailTrimmed,
+        regPassword
+      );
+      await updateProfile(firebaseUser, { displayName: nameTrimmed });
+
       const userProfile: User = {
-        id: `usr_${newStudent.id}`,
+        id: firebaseUser.uid,
         name: newStudent.name,
         email: newStudent.email,
         role: 'student',
@@ -404,28 +373,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         rollNo: newStudent.rollNo,
       };
 
-      // Persist student to state and database
-      if (onRegisterStudent) {
-        await onRegisterStudent(newStudent);
-      } else {
-        await firestoreService.saveStudent(newStudent);
-      }
+      await firestoreService.saveStudent(newStudent);
 
-      // Save user profile for authorization
-      try {
-        await firestoreService.saveUser(userProfile);
-      } catch (userErr) {
-        console.warn('Could not save user profile:', userErr);
-      }
-
-      // Store PIN if supplied
-      if (regPassword.trim()) {
-        try {
-          localStorage.setItem(`student_pin_${rollTrimmed}`, regPassword.trim());
-        } catch {
-          // ignore
-        }
-      }
+      await firestoreService.saveUser(userProfile);
 
       setRegisteredStudentInfo({
         student: newStudent,
@@ -441,9 +391,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col justify-between selection:bg-blue-600 selection:text-white">
+    <div className="h-dvh overflow-hidden bg-slate-900 text-slate-100 flex flex-col selection:bg-blue-600 selection:text-white">
       {/* Header bar */}
-      <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-md sticky top-0 z-30">
+      <header className="shrink-0 border-b border-slate-800 bg-slate-950/80 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 rounded-lg bg-blue-700 flex items-center justify-center text-white shadow-md border border-blue-600">
@@ -458,27 +408,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   ERP PORTAL
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
-                Official Student Attendance & Bursar Fee Registry System
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center space-x-3 text-xs">
-            <div className="flex items-center space-x-1.5 text-amber-300 bg-amber-950/70 border border-amber-800/80 px-2.5 py-1 rounded-full shadow-xs">
-              <Flame className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="font-mono text-[11px] font-medium hidden sm:inline">Firebase Connected</span>
-            </div>
-            <div className="hidden md:flex items-center space-x-2 text-slate-400">
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>Session: 2025–2026</span>
             </div>
           </div>
         </div>
       </header>
 
       {/* Main Login Card Area */}
-      <main className="flex-1 flex items-center justify-center px-4 py-10 sm:py-14">
+      <main className="flex-1 min-h-0 overflow-y-auto flex items-center justify-center px-4 py-4">
         <div className="max-w-xl w-full">
           {/* Top Segmented Tabs: Admin vs Teacher vs Student */}
           <div className="bg-slate-950 p-1.5 rounded-xl border border-slate-800 shadow-xl mb-6 grid grid-cols-3 gap-1">
@@ -582,13 +518,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                         required
                         value={adminEmail}
                         onChange={(e) => setAdminEmail(e.target.value)}
-                        placeholder="registrar.sharma@university.ac.in"
+                        placeholder="name@institution.edu"
                         className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 focus:outline-hidden transition"
                       />
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
                     <div>
                       <div className="flex items-center justify-between mb-1">
                         <label className="block text-xs font-semibold text-slate-700">
@@ -601,9 +537,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                           id="admin-password-input"
                           type={adminShowPassword ? 'text' : 'password'}
                           required
+                          minLength={6}
+                          disabled={isSigningInEmail}
                           value={adminPassword}
                           onChange={(e) => setAdminPassword(e.target.value)}
-                          placeholder="••••••••"
+                          placeholder="Enter your password"
                           className="w-full pl-9 pr-10 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 focus:outline-hidden transition"
                         />
                         <button
@@ -617,42 +555,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       </div>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Security Clearance PIN
-                      </label>
-                      <div className="relative">
-                        <KeyRound className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                        <input
-                          id="admin-security-pin"
-                          type="text"
-                          value={adminSecurityPin}
-                          onChange={(e) => setAdminSecurityPin(e.target.value)}
-                          placeholder="8821"
-                          maxLength={6}
-                          className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono tracking-widest focus:bg-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 focus:outline-hidden transition"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs text-slate-600 pt-1">
-                    <label className="flex items-center space-x-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        defaultChecked
-                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                      />
-                      <span>Keep administrative session alive (Level 1 Clearance)</span>
-                    </label>
                   </div>
 
                   <button
                     id="btn-admin-login-submit"
                     type="submit"
-                    className="w-full mt-2 py-2.5 px-4 bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-md hover:shadow-lg transition flex items-center justify-center space-x-2"
+                    disabled={isSigningInEmail}
+                    className="w-full mt-2 py-2.5 px-4 bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-md hover:shadow-lg transition flex items-center justify-center space-x-2 disabled:opacity-60"
                   >
-                    <span>Sign In to Administrator Console</span>
+                    <span>{isSigningInEmail ? 'Signing in...' : 'Sign In to Administrator Console'}</span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
 
@@ -661,24 +572,23 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       <div className="w-full border-t border-slate-200"></div>
                     </div>
                     <div className="relative flex justify-center text-[11px] uppercase">
-                      <span className="bg-white px-2 text-slate-400 font-medium">Or continue with Cloud Identity</span>
+                      <span className="bg-white px-2 text-slate-400 font-medium">Or continue with</span>
                     </div>
                   </div>
 
                   <button
                     id="btn-admin-google-login"
                     type="button"
-                    disabled={isSigningInGoogle}
+                    disabled={isSigningInGoogle || isSigningInEmail}
                     onClick={() => handleGoogleSignIn('admin')}
                     className="w-full py-2 px-3 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-semibold shadow-xs transition flex items-center justify-center space-x-2 disabled:opacity-60"
                   >
-                    <Flame className="w-4 h-4 text-amber-500" />
-                    <span>{isSigningInGoogle ? 'Connecting Firebase...' : 'Sign In with Google (Admin Authorization)'}</span>
+                    <span>{isSigningInGoogle ? 'Connecting...' : 'Continue with Google'}</span>
                   </button>
                 </form>
 
                 {/* Quick Admin Demo Credentials */}
-                <div className="pt-4 border-t border-slate-200">
+                <div hidden className="pt-4 border-t border-slate-200">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-semibold text-slate-700 flex items-center space-x-1">
                       <Sparkles className="w-3.5 h-3.5 text-amber-500" />
@@ -760,7 +670,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </div>
 
                 {/* Exclusive Permissions Breakdown */}
-                <div className="bg-indigo-50/70 p-3.5 rounded-xl border border-indigo-200/80 text-[11px] text-indigo-950 space-y-1.5">
+                <div hidden className="bg-indigo-50/70 p-3.5 rounded-xl border border-indigo-200/80 text-[11px] text-indigo-950 space-y-1.5">
                   <div className="font-bold text-indigo-900 flex items-center space-x-1.5">
                     <ShieldCheck className="w-3.5 h-3.5 text-indigo-700" />
                     <span>Exclusive Administrator Permissions Granted:</span>
@@ -786,7 +696,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </div>
 
                 {/* Switch Links */}
-                <div className="flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100 gap-2">
+                <div hidden className="flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100 gap-2">
                   <div>
                     <span>Teaching Faculty? </span>
                     <button
@@ -867,7 +777,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                         required
                         value={teacherEmail}
                         onChange={(e) => setTeacherEmail(e.target.value)}
-                        placeholder="a.sen@university.ac.in"
+                        placeholder="name@institution.edu"
                         className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-hidden transition"
                       />
                     </div>
@@ -878,9 +788,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       <label className="block text-xs font-semibold text-slate-700">
                         Faculty Password
                       </label>
-                      <span className="text-[11px] text-blue-700 hover:underline cursor-pointer">
-                        Forgot password?
-                      </span>
                     </div>
                     <div className="relative">
                       <Lock className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
@@ -888,9 +795,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                         id="teacher-password-input"
                         type={teacherShowPassword ? 'text' : 'password'}
                         required
+                        minLength={6}
+                        disabled={isSigningInEmail}
                         value={teacherPassword}
                         onChange={(e) => setTeacherPassword(e.target.value)}
-                        placeholder="••••••••"
+                        placeholder="Enter your password"
                         className="w-full pl-9 pr-10 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-hidden transition"
                       />
                       <button
@@ -904,23 +813,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between text-xs text-slate-600 pt-1">
-                    <label className="flex items-center space-x-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        defaultChecked
-                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span>Keep me signed in on this workstation</span>
-                    </label>
-                  </div>
-
                   <button
                     id="btn-teacher-login-submit"
                     type="submit"
-                    className="w-full mt-2 py-2.5 px-4 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-md hover:shadow-lg transition flex items-center justify-center space-x-2"
+                    disabled={isSigningInEmail}
+                    className="w-full mt-2 py-2.5 px-4 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-md hover:shadow-lg transition flex items-center justify-center space-x-2 disabled:opacity-60"
                   >
-                    <span>Sign In to Faculty Portal</span>
+                    <span>{isSigningInEmail ? 'Signing in...' : 'Sign In to Faculty Portal'}</span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
 
@@ -929,24 +828,23 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       <div className="w-full border-t border-slate-200"></div>
                     </div>
                     <div className="relative flex justify-center text-[11px] uppercase">
-                      <span className="bg-white px-2 text-slate-400 font-medium">Or continue with Cloud Identity</span>
+                      <span className="bg-white px-2 text-slate-400 font-medium">Or continue with</span>
                     </div>
                   </div>
 
                   <button
                     id="btn-teacher-google-login"
                     type="button"
-                    disabled={isSigningInGoogle}
+                    disabled={isSigningInGoogle || isSigningInEmail}
                     onClick={() => handleGoogleSignIn('teacher')}
                     className="w-full py-2 px-3 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-semibold shadow-xs transition flex items-center justify-center space-x-2 disabled:opacity-60"
                   >
-                    <Flame className="w-4 h-4 text-amber-500" />
-                    <span>{isSigningInGoogle ? 'Connecting Firebase...' : 'Sign In with Google (Firebase Auth)'}</span>
+                    <span>{isSigningInGoogle ? 'Connecting...' : 'Continue with Google'}</span>
                   </button>
                 </form>
 
                 {/* Quick Demo Credentials */}
-                <div className="pt-4 border-t border-slate-200">
+                <div hidden className="pt-4 border-t border-slate-200">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-semibold text-slate-700 flex items-center space-x-1">
                       <Sparkles className="w-3.5 h-3.5 text-blue-600" />
@@ -1007,7 +905,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </div>
 
                 {/* Institutional Note */}
-                <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 text-[11px] text-slate-500 space-y-1">
+                <div hidden className="bg-slate-50 p-3 rounded-lg border border-slate-200 text-[11px] text-slate-500 space-y-1">
                   <div className="font-semibold text-slate-700">Statutory Notice for Faculty:</div>
                   <p>
                     Daily lecture attendance rolls must be marked within 24 hours of session completion. 
@@ -1016,7 +914,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </div>
 
                 {/* Switch Links */}
-                <div className="flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100 gap-2">
+                <div hidden className="flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100 gap-2">
                   <div>
                     <span>Administrative Authority? </span>
                     <button
@@ -1252,7 +1150,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                             required
                             value={studentRollNo}
                             onChange={(e) => setStudentRollNo(e.target.value.toUpperCase())}
-                            placeholder="CS-2024-001"
+                            placeholder="Enter your roll number"
                             className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm font-mono uppercase bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 focus:outline-hidden transition"
                           />
                         </div>
@@ -1273,9 +1171,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                             id="student-password-input"
                             type={studentShowPassword ? 'text' : 'password'}
                             required
+                            minLength={6}
+                            disabled={isSigningInEmail}
                             value={studentPassword}
                             onChange={(e) => setStudentPassword(e.target.value)}
-                            placeholder="DD/MM/YYYY or Student PIN"
+                            placeholder="Enter your password"
                             className="w-full pl-9 pr-10 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 focus:outline-hidden transition"
                           />
                           <button
@@ -1289,23 +1189,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between text-xs text-slate-600 pt-1">
-                        <label className="flex items-center space-x-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            defaultChecked
-                            className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                          />
-                          <span>Save student credentials on this browser</span>
-                        </label>
-                      </div>
-
                       <button
                         id="btn-student-login-submit"
                         type="submit"
-                        className="w-full mt-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-md hover:shadow-lg transition flex items-center justify-center space-x-2"
+                        disabled={isSigningInEmail}
+                        className="w-full mt-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-md hover:shadow-lg transition flex items-center justify-center space-x-2 disabled:opacity-60"
                       >
-                        <span>Sign In to Student Portal</span>
+                        <span>{isSigningInEmail ? 'Signing in...' : 'Sign In to Student Portal'}</span>
                         <ArrowRight className="w-4 h-4" />
                       </button>
 
@@ -1314,19 +1204,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                           <div className="w-full border-t border-slate-200"></div>
                         </div>
                         <div className="relative flex justify-center text-[11px] uppercase">
-                          <span className="bg-white px-2 text-slate-400 font-medium">Or continue with Student Google ID</span>
+                          <span className="bg-white px-2 text-slate-400 font-medium">Or continue with</span>
                         </div>
                       </div>
 
                       <button
                         id="btn-student-google-login"
                         type="button"
-                        disabled={isSigningInGoogle}
+                        disabled={isSigningInGoogle || isSigningInEmail}
                         onClick={() => handleGoogleSignIn('student')}
                         className="w-full py-2 px-3 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-semibold shadow-xs transition flex items-center justify-center space-x-2 disabled:opacity-60"
                       >
-                        <Flame className="w-4 h-4 text-emerald-600" />
-                        <span>{isSigningInGoogle ? 'Connecting Firebase...' : 'Sign In with Google (Firebase Auth)'}</span>
+                        <span>{isSigningInGoogle ? 'Connecting...' : 'Continue with Google'}</span>
                       </button>
 
                       {/* Prompt to register if new student */}
@@ -1353,7 +1242,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                     </form>
 
                     {/* Quick Student Demo Accounts */}
-                    <div className="pt-4 border-t border-slate-200">
+                    <div hidden className="pt-4 border-t border-slate-200">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-semibold text-slate-700 flex items-center space-x-1">
                           <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
@@ -1399,7 +1288,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                     </div>
 
                     {/* University Regulation Notice */}
-                    <div className="bg-emerald-50/70 p-3 rounded-lg border border-emerald-200 text-[11px] text-slate-600 space-y-1">
+                    <div hidden className="bg-emerald-50/70 p-3 rounded-lg border border-emerald-200 text-[11px] text-slate-600 space-y-1">
                       <div className="font-semibold text-emerald-900 flex items-center space-x-1">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                         <span>University Ordinance Clause 4.2:</span>
@@ -1625,9 +1514,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                           <input
                             id="reg-password-input"
                             type={regShowPassword ? 'text' : 'password'}
+                            required
+                            minLength={6}
                             value={regPassword}
                             onChange={(e) => setRegPassword(e.target.value)}
-                            placeholder="e.g. 4-digit PIN or secret password"
+                            placeholder="At least 6 characters"
                             className="w-full pl-9 pr-10 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 focus:outline-hidden transition"
                           />
                           <button
@@ -1679,7 +1570,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 )}
 
                 {/* Switch Link to Faculty and Admin Portal */}
-                <div className="flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-200 gap-2">
+                <div hidden className="flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-200 gap-2">
                   <div>
                     <span>Administrator? </span>
                     <button
@@ -1713,19 +1604,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         </div>
       </main>
 
-      {/* Portal Footer */}
-      <footer className="border-t border-slate-800 bg-slate-950 py-4 text-center text-xs text-slate-500">
-        <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <div>
-            &copy; 2026 Academic Registry & Finance Bursar. All rights reserved.
-          </div>
-          <div className="flex items-center space-x-4 text-[11px] text-slate-400">
-            <span>Helpdesk: support@university.ac.in</span>
-            <span>•</span>
-            <span>Registrar Office: ext 104 / 108</span>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 };

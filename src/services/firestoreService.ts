@@ -6,6 +6,9 @@ import {
   writeBatch,
   onSnapshot,
   getDocs,
+  getDoc,
+  query,
+  where,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import { Student, Course, AttendanceRecord, FeePayment, User } from '../types';
@@ -259,6 +262,28 @@ export const firestoreService = {
       await setDoc(doc(db, 'users', user.id), user);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  },
+
+  async getUser(userId: string): Promise<User | null> {
+    const path = `users/${userId}`;
+    try {
+      const snapshot = await getDoc(doc(db, 'users', userId));
+      return snapshot.exists() ? snapshot.data() as User : null;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, path);
+    }
+  },
+
+  async getUserByEmail(email: string): Promise<User | null> {
+    const path = 'users';
+    try {
+      const snapshot = await getDocs(
+        query(collection(db, path), where('email', '==', email))
+      );
+      return snapshot.empty ? null : snapshot.docs[0].data() as User;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, path);
     }
   },
 };
